@@ -1,0 +1,54 @@
+stages:
+  - build
+  - deploy
+
+deploy-dev:
+  stage: deploy
+  tags: 
+    - shell
+  script:
+    - sudo mkdir -p /data/odoo-container
+    - sudo mv /data/odoo-container /data/odoo-container_backup_$(date +"%Y%m%d%H%M%S%3N")
+    - sudo cp -r ./build /data/odoo-container
+  only: 
+    - dev
+
+# Build and push Docker image to GitLab Registry
+build_image:
+  stage: build
+  before_script:
+    - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  image: docker:stable
+  tags:
+    - shell
+  script:
+  - VERSION=$(git rev-parse --short HEAD)
+  - echo "Generating odoo.conf with envsubst..."
+  - envsubst < odoo.conf.raw > odoo.conf
+  - cat odoo.conf # debug output
+  - IMAGE_TAG="$CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$VERSION"
+  - docker build -t "$IMAGE_TAG" .
+  - docker push "$IMAGE_TAG"
+
+  only:
+    - main
+
+# Deploy Docker image
+deploy_image:
+  stage: deploy
+  before_script:
+    - echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+  image: docker:stable
+  tags:
+    - shell
+  script:
+    - VERSION=$(git rev-parse --short HEAD)
+    - IMAGE_TAG="$CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$VERSION"
+    - docker pull "$IMAGE_TAG"
+    - docker stop odoo-container || true
+    - docker rm odoo-container || true
+    - docker run -d -p 8069:8069 --restart unless-stopped --name odoo-container $IMAGE_TAG
+
+
+  only:
+    - main
